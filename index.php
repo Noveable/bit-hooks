@@ -3,7 +3,7 @@
 // ... (ваши настройки остаются без изменений) ...
 define('B24_WEBHOOK_URL', 'https://tugur.bitrix24.ru/rest/15/c9x0qjz9quea1o01/');
 define('TG_TOKEN', '8235183293:AAFjAhCwp1Y7OD21MLp8YUTSavMyf45y4Q4');
-define('TG_CHAT_ID', -5206806235');
+define('TG_CHAT_ID', '-5206806235');
 define('POSITIVE_EVENT_FIELD', 'UF_CRM_1768751320643');
 define('NEGATIVE_EVENT_FIELD', 'UF_CRM_1768751944908');
 define('EVENT_DATE_FIELD', 'UF_CRM_1770607841259');
@@ -132,4 +132,5 @@ curl_close($curl);
 
 writeToLog($response, 'Telegram Response');
 ?>
+
 
