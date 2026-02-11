@@ -1,99 +1,127 @@
 <?php
+// --- НАСТРОЙКИ ---
+// Вставьте сюда URL входящего вебхука из Шага 2 (Часть А)
+define('B24_WEBHOOK_URL', 'https://tugur.bitrix24.ru/rest/15/c9x0qjz9quea1o01/');
 
-// ========================
-//  НАСТРОЙКИ
-// ========================
-$TELEGRAM_BOT_TOKEN = "8235183293:AAFjAhCwp1Y7OD21MLp8YUTSavMyf45y4Q4";
-$TELEGRAM_CHAT_ID   = "-5206806235";
+// Вставьте сюда токен вашего Telegram-бота из Шага 1
+define('TG_TOKEN', '8235183293:AAFjAhCwp1Y7OD21MLp8YUTSavMyf45y4Q4');
 
-// Входящий вебхук Bitrix24 (созданный в разделе Приложения → Вебхуки)
-$B24_WEBHOOK = "https://tugur.bitrix24.ru/rest/15/c9x0qjz9quea1o01/";
+// Вставьте сюда ID вашего чата (со знаком минус) из Шага 1
+define('TG_CHAT_ID', '-5206806235');
 
-// Ваши ID пользовательских полей в сделке
-$UF_POSITIVE_EVENT = "UF_CRM_1768751320643";   // Положительные события
-$UF_NEGATIVE_EVENT = "UF_CRM_1768751944908";   // Отрицательные события
-$UF_EVENT_DATE     = "UF_CRM_1770607841259";       // Дата изменения события
+// Вставьте сюда коды ваших пользовательских полей из Шага 2 (Часть Б)
+define('POSITIVE_EVENT_FIELD', 'UF_CRM_1768751320643'); // Код поля "Положительные события"
+define('NEGATIVE_EVENT_FIELD', 'UF_CRM_1768751944908'); // Код поля "Отрицательные события"
+define('EVENT_DATE_FIELD', 'UF_CRM_1770607841259');   // Код поля "Дата изменения события"
 
-// ========================
-//  ПОЛУЧАЕМ ID СДЕЛКИ ИЗ ВЕБХУКА
-// ========================
-$input = file_get_contents("php://input");
-$data = json_decode($input, true);
+// --- КОНЕЦ НАСТРОЕК ---
 
-$dealId = $data["data"]["FIELDS"]["ID"];
-
-if (!$dealId) {
-    exit("No deal ID");
+// Функция для логирования (помогает при отладке)
+function writeToLog($data, $title = '') {
+    $log = "\n------------------------\n";
+    $log .= date("Y.m.d G:i:s") . "\n";
+    $log .= (strlen($title) > 0 ? $title : 'DEBUG') . "\n";
+    $log .= print_r($data, true);
+    $log .= "\n------------------------\n";
+    file_put_contents(getcwd() . '/webhook.log', $log, FILE_APPEND);
 }
 
-// ========================
-//  1. ПОЛУЧАЕМ ДАННЫЕ СДЕЛКИ
-// ========================
-$deal = json_decode(file_get_contents($B24_WEBHOOK . "crm.deal.get.json?ID=" . $dealId), true);
-$deal = $deal["result"];
+// Получаем данные от Bitrix24
+$request = json_decode(file_get_contents('php://input'), true);
+writeToLog($request, 'Request from B24');
 
-// ========================
-//  2. ПОЛУЧАЕМ ДАННЫЕ КОМПАНИИ
-// ========================
-$company = [];
-if (!empty($deal["COMPANY_ID"])) {
-    $company = json_decode(file_get_contents($B24_WEBHOOK . "crm.company.get.json?ID=" . $deal["COMPANY_ID"]), true);
-    $company = $company["result"];
+// Проверяем, что это событие обновления сделки
+if ($request['event'] !== 'ONCRMDEALUPDATE') {
+    exit();
 }
 
-// ========================
-//  3. ПОЛУЧАЕМ ДАННЫЕ ОТВЕТСТВЕННОГО
-// ========================
-$user = json_decode(file_get_contents($B24_WEBHOOK . "user.get.json?ID=" . $deal["ASSIGNED_BY_ID"]), true);
-$user = $user["result"][0];
+$dealId = $request['data']['FIELDS']['ID'];
 
-// ========================
-//  4. ОПРЕДЕЛЯЕМ ТИП СОБЫТИЯ
-// ========================
-$eventType = "";
-$eventText = "";
+// Функция для выполнения запросов к API Bitrix24
+function executeB24Api($method, $params) {
+    $queryUrl = B24_WEBHOOK_URL . $method . '.json';
+    $queryData = http_build_query($params);
 
-if (!empty($deal[$UF_POSITIVE_EVENT])) {
-    $eventType = "Положительное событие";
-    $eventText = $deal[$UF_POSITIVE_EVENT];
+    $curl = curl_init();
+    curl_setopt_array($curl, array(
+        CURLOPT_SSL_VERIFYPEER => 0,
+        CURLOPT_POST => 1,
+        CURLOPT_HEADER => 0,
+        CURLOPT_RETURNTRANSFER => 1,
+        CURLOPT_URL => $queryUrl,
+        CURLOPT_POSTFIELDS => $queryData,
+    ));
+    $result = curl_exec($curl);
+    curl_close($curl);
+    return json_decode($result, true);
 }
 
-if (!empty($deal[$UF_NEGATIVE_EVENT])) {
-    $eventType = "Отрицательное событие";
-    $eventText = $deal[$UF_NEGATIVE_EVENT];
+// 1. Получаем полную информацию о сделке
+$dealInfo = executeB24Api('crm.deal.get', ['id' => $dealId]);
+$deal = $dealInfo['result'];
+writeToLog($deal, 'Deal Info');
+
+// 2. Проверяем, заполнены ли поля событий. Если нет - выходим.
+$positiveEvent = !empty($deal[POSITIVE_EVENT_FIELD]) ? (is_array($deal[POSITIVE_EVENT_FIELD]) ? implode(', ', $deal[POSITIVE_EVENT_FIELD]) : $deal[POSITIVE_EVENT_FIELD]) : '';
+$negativeEvent = !empty($deal[NEGATIVE_EVENT_FIELD]) ? (is_array($deal[NEGATIVE_EVENT_FIELD]) ? implode(', ', $deal[NEGATIVE_EVENT_FIELD]) : $deal[NEGATIVE_EVENT_FIELD]) : '';
+
+if (empty($positiveEvent) && empty($negativeEvent)) {
+    exit(); // Ни одно из полей событий не заполнено, уведомление не нужно.
 }
 
-// ========================
-//  5. ДАТА СОБЫТИЯ
-// ========================
-$eventDate = !empty($deal[$UF_EVENT_DATE]) ? $deal[$UF_EVENT_DATE] : date("d.m.Y H:i");
+// 3. Собираем информацию для сообщения
+$eventType = '';
+if (!empty($positiveEvent)) {
+    $eventType .= "Положительное: " . (is_string($positiveEvent) ? $positiveEvent : 'Да');
+}
+if (!empty($negativeEvent)) {
+    $eventType .= (!empty($eventType) ? "\n" : "") . "Отрицательное: " . (is_string($negativeEvent) ? $negativeEvent : 'Да');
+}
 
-// ========================
-//  6. ФОРМИРУЕМ СООБЩЕНИЕ
-// ========================
-$message  = "📌 *Новое событие в сделке*\n\n";
-$message .= "👤 Ответственный: *{$user['NAME']} {$user['LAST_NAME']}*\n";
-$message .= "📅 Дата: *{$eventDate}*\n";
-$message .= "📄 Сделка: *{$deal['TITLE']}*\n";
-$message .= "🔎 Тип события: *{$eventType}*\n";
-$message .= "📝 Описание: " . (!empty($eventText) ? $eventText : "-") . "\n";
-$message .= "💰 Сумма: *{$deal['OPPORTUNITY']}*\n";
-$message .= "🏢 Компания: *" . (!empty($company["TITLE"]) ? $company["TITLE"] : "Без компании") . "*";
+$responsibleName = 'Не назначен';
+if (!empty($deal['ASSIGNED_BY_ID'])) {
+    $userInfo = executeB24Api('user.get', ['ID' => $deal['ASSIGNED_BY_ID']]);
+    if (!empty($userInfo['result'][0])) {
+        $user = $userInfo['result'][0];
+        $responsibleName = $user['NAME'] . ' ' . $user['LAST_NAME'];
+    }
+}
 
-// ========================
-//  7. ОТПРАВКА В TELEGRAM
-// ========================
-$telegramUrl = "https://api.telegram.org/bot{$TELEGRAM_BOT_TOKEN}/sendMessage";
+$companyName = 'Компания не указана';
+if (!empty($deal['COMPANY_ID'])) {
+    $companyInfo = executeB24Api('crm.company.get', ['id' => $deal['COMPANY_ID']]);
+    if (!empty($companyInfo['result']['TITLE'])) {
+        $companyName = $companyInfo['result']['TITLE'];
+    }
+}
 
+$dealDateRaw = !empty($deal[EVENT_DATE_FIELD]) ? $deal[EVENT_DATE_FIELD] : $deal['DATE_MODIFY'];
+$dealDate = date('d.m.Y H:i', strtotime($dealDateRaw));
+
+// 4. Формируем текст сообщения
+$message = "🔔 **Событие по сделке**\n\n";
+$message .= "**Ответственный:** " . $responsibleName . "\n";
+$message .= "**Дата события:** " . $dealDate . "\n";
+$message .= "**Название сделки:** " . $deal['TITLE'] . "\n";
+$message .= "**Сумма:** " . number_format($deal['OPPORTUNITY'], 2, ',', ' ') . ' ' . $deal['CURRENCY_ID'] . "\n";
+$message .= "**Компания:** " . $companyName . "\n";
+$message .= "**Тип события:**\n" . $eventType;
+
+// 5. Отправляем сообщение в Telegram
+$telegramApiUrl = 'https://api.telegram.org/bot' . TG_TOKEN . '/sendMessage';
 $params = [
-    "chat_id" => $TELEGRAM_CHAT_ID,
-    "text" => $message,
-    "parse_mode" => "Markdown"
+    'chat_id' => TG_CHAT_ID,
+    'text' => $message,
+    'parse_mode' => 'Markdown',
 ];
 
-file_get_contents($telegramUrl . "?" . http_build_query($params));
+$curl = curl_init();
+curl_setopt($curl, CURLOPT_URL, $telegramApiUrl);
+curl_setopt($curl, CURLOPT_POST, true);
+curl_setopt($curl, CURLOPT_POSTFIELDS, http_build_query($params));
+curl_setopt($curl, CURLOPT_RETURNTRANSFER, true);
+$response = curl_exec($curl);
+curl_close($curl);
 
-// ========================
-echo "OK";
+writeToLog($response, 'Telegram Response');
 ?>
-
