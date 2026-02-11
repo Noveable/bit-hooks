@@ -1,42 +1,26 @@
 <?php
 // --- НАСТРОЙКИ ---
-// Вставьте сюда ваши реальные данные
+// Убедитесь, что здесь стоят ваши правильные данные
 define('B24_WEBHOOK_URL', 'https://tugur.bitrix24.ru/rest/15/c9x0qjz9quea1o01/');
 define('TG_TOKEN', '8235183293:AAFjAhCwp1Y7OD21MLp8YUTSavMyf45y4Q4');
 define('TG_CHAT_ID', '-5206806235');
+// Коды полей, которые вы уже правильно определили
 define('POSITIVE_EVENT_FIELD', 'UF_CRM_1768751320643');
 define('NEGATIVE_EVENT_FIELD', 'UF_CRM_1768751944908');
 define('EVENT_DATE_FIELD', 'UF_CRM_1770607841259');
+
 // --- КОНЕЦ НАСТРОЕК ---
 
 
-// === ОТЛАДОЧНАЯ ФУНКЦИЯ ДЛЯ ОТПРАВКИ ЛОГОВ В TELEGRAM ===
-function sendDebugToTelegram($data, $title = '') {
-    $log = "--- " . (strlen($title) > 0 ? $title : 'DEBUG') . " ---\n";
-    $log .= print_r($data, true);
-    $params = ['chat_id' => TG_CHAT_ID, 'text' => substr($log, 0, 4096)]; // Обрезаем лог, если он слишком длинный
-    $url = 'https://api.telegram.org/bot' . TG_TOKEN . '/sendMessage?' . http_build_query($params);
-    file_get_contents($url);
-}
-
-// === ИЗМЕНЕНИЕ ЗДЕСЬ: Читаем данные из $_POST ===
+// Читаем данные из $_POST
 $request = $_POST;
-sendDebugToTelegram($request, 'Data from POST');
-
-// Проверяем, что данные пришли и это массив
-if (!is_array($request) || !isset($request['event'])) {
-    sendDebugToTelegram('Request is not a valid array or event key is missing.', 'ERROR');
-    exit();
-}
 
 // Проверяем, что это событие обновления сделки
-if ($request['event'] !== 'ONCRMDEALUPDATE') {
-    sendDebugToTelegram('Event is not ONCRMDEALUPDATE. Event was: ' . $request['event'], 'Exit Condition');
+if (!is_array($request) || !isset($request['event']) || $request['event'] !== 'ONCRMDEALUPDATE') {
     exit();
 }
 
 $dealId = $request['data']['FIELDS']['ID'];
-sendDebugToTelegram("Got Deal ID: " . $dealId, "INFO");
 
 // Функция для выполнения запросов к API Bitrix24
 function executeB24Api($method, $params) {
@@ -49,26 +33,69 @@ function executeB24Api($method, $params) {
     return json_decode($result, true);
 }
 
+// === НАЧАЛО НОВОЙ ЛОГИКИ ===
+
 // 1. Получаем полную информацию о сделке
 $dealInfo = executeB24Api('crm.deal.get', ['id' => $dealId]);
-sendDebugToTelegram($dealInfo, 'Deal Info from B24 API');
 $deal = $dealInfo['result'];
 
-// 2. Проверяем, заполнены ли поля событий
-$positiveEvent = !empty($deal[POSITIVE_EVENT_FIELD]) ? (is_array($deal[POSITIVE_EVENT_FIELD]) ? implode(', ', $deal[POSITIVE_EVENT_FIELD]) : $deal[POSITIVE_EVENT_FIELD]) : '';
-$negativeEvent = !empty($deal[NEGATIVE_EVENT_FIELD]) ? (is_array($deal[NEGATIVE_EVENT_FIELD]) ? implode(', ', $deal[NEGATIVE_EVENT_FIELD]) : $deal[NEGATIVE_EVENT_FIELD]) : '';
+// 2. Получаем описания ВСЕХ полей сделки, чтобы найти наши списки
+$dealFieldsInfo = executeB24Api('crm.deal.fields', []);
+$dealFields = $dealFieldsInfo['result'];
 
-if (empty($positiveEvent) && empty($negativeEvent)) {
-    sendDebugToTelegram('Positive and Negative fields are empty. Exiting.', 'Exit Condition');
+// 3. Функция-"переводчик" для полей типа "Список"
+function translateListValues($fieldCode, $selectedIds, $allFields) {
+    if (empty($selectedIds)) {
+        return '';
+    }
+
+    // Приводим ID к формату массива для единообразной обработки
+    if (!is_array($selectedIds)) {
+        $selectedIds = [$selectedIds];
+    }
+
+    // Ищем описание нашего поля и его элементы списка
+    if (!isset($allFields[$fieldCode]) || !isset($allFields[$fieldCode]['items'])) {
+        // Если что-то пошло не так, возвращаем как есть (сырые ID)
+        return implode(', ', $selectedIds);
+    }
+
+    // Создаем карту "перевода": [ '903' => 'Текст значения', ... ]
+    $translationMap = [];
+    foreach ($allFields[$fieldCode]['items'] as $item) {
+        $translationMap[$item['ID']] = $item['VALUE'];
+    }
+
+    $translatedValues = [];
+    foreach ($selectedIds as $id) {
+        // "Переводим" каждый ID в текст
+        if (isset($translationMap[$id])) {
+            $translatedValues[] = $translationMap[$id];
+        }
+    }
+
+    return implode(', ', $translatedValues);
+}
+
+// 4. Получаем ID событий и "переводим" их в текст
+$positiveEventIds = !empty($deal[POSITIVE_EVENT_FIELD]) ? $deal[POSITIVE_EVENT_FIELD] : [];
+$negativeEventIds = !empty($deal[NEGATIVE_EVENT_FIELD]) ? $deal[NEGATIVE_EVENT_FIELD] : [];
+
+$positiveEventText = translateListValues(POSITIVE_EVENT_FIELD, $positiveEventIds, $dealFields);
+$negativeEventText = translateListValues(NEGATIVE_EVENT_FIELD, $negativeEventIds, $dealFields);
+
+// === КОНЕЦ НОВОЙ ЛОГИКИ ===
+
+
+// 5. Проверяем, что после "перевода" есть текст. Если нет - выходим.
+if (empty($positiveEventText) && empty($negativeEventText)) {
     exit();
 }
 
-sendDebugToTelegram('Fields are filled. Preparing main message.', 'SUCCESS');
-
-// 3. Собираем информацию для сообщения
+// 6. Собираем информацию для сообщения (уже с текстом)
 $eventType = '';
-if (!empty($positiveEvent)) $eventType .= "Положительное: " . (is_string($positiveEvent) ? $positiveEvent : 'Да');
-if (!empty($negativeEvent)) $eventType .= (!empty($eventType) ? "\n" : "") . "Отрицательное: " . (is_string($negativeEvent) ? $negativeEvent : 'Да');
+if (!empty($positiveEventText)) $eventType .= "Положительное: " . $positiveEventText;
+if (!empty($negativeEventText)) $eventType .= (!empty($eventType) ? "\n" : "") . "Отрицательное: " . $negativeEventText;
 
 $responsibleName = 'Не назначен';
 if (!empty($deal['ASSIGNED_BY_ID'])) {
@@ -90,7 +117,7 @@ if (!empty($deal['COMPANY_ID'])) {
 $dealDateRaw = !empty($deal[EVENT_DATE_FIELD]) ? $deal[EVENT_DATE_FIELD] : $deal['DATE_MODIFY'];
 $dealDate = date('d.m.Y H:i', strtotime($dealDateRaw));
 
-// 4. Формируем текст сообщения
+// 7. Формируем финальный текст сообщения
 $message = "🔔 **Событие по сделке**\n\n";
 $message .= "**Ответственный:** " . $responsibleName . "\n";
 $message .= "**Дата события:** " . $dealDate . "\n";
@@ -99,7 +126,7 @@ $message .= "**Сумма:** " . number_format($deal['OPPORTUNITY'], 2, ',', ' '
 $message .= "**Компания:** " . $companyName . "\n";
 $message .= "**Тип события:**\n" . $eventType;
 
-// 5. Отправляем основное сообщение в Telegram
+// 8. Отправляем сообщение в Telegram
 $telegramApiUrl = 'https://api.telegram.org/bot' . TG_TOKEN . '/sendMessage';
 $params = ['chat_id' => TG_CHAT_ID, 'text' => $message, 'parse_mode' => 'Markdown'];
 $curl = curl_init();
@@ -107,9 +134,6 @@ curl_setopt($curl, CURLOPT_URL, $telegramApiUrl);
 curl_setopt($curl, CURLOPT_POST, true);
 curl_setopt($curl, CURLOPT_POSTFIELDS, http_build_query($params));
 curl_setopt($curl, CURLOPT_RETURNTRANSFER, true);
-$response = curl_exec($curl);
+curl_exec($curl);
 curl_close($curl);
-
-sendDebugToTelegram($response, 'Telegram API Response for Main Message');
 ?>
-
