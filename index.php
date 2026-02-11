@@ -132,7 +132,7 @@ $message = "🔔 **Новое событие в сделке**\n\n";
 $message .= "**Дата события:** " . $dealDate . "\n";
 $message .= "**Название сделки:** " . $deal['TITLE'] . "\n";
 $message .= "**Ответственный:** " . $responsibleName . "\n";
-$message .= "**Тип события:**\n" . $eventType;
+$message .= "**Тип события:**\n" . $eventType . "\n";
 $message .= "**Компания:** " . $companyName . "\n";
 
 // === НОВОЕ: Добавляем поле "Что покупают" в сообщение, если оно заполнено ===
@@ -141,7 +141,7 @@ if (!empty($purchaseText)) {
 }
 
 $message .= "**Сумма:** " . number_format($deal['OPPORTUNITY'], 2, ',', ' ') . ' ' . $deal['CURRENCY_ID'] . "\n";
-$message .= "**Компания:** " . $companyName . "\n";
+
 
 
 // 11. Отправляем сообщение в Telegram
@@ -163,3 +163,4 @@ executeB24Api('crm.deal.update', [
     ]
 ]);
 ?>
+
