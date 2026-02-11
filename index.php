@@ -1,18 +1,12 @@
 <?php
 // --- НАСТРОЙКИ ---
-// Вставьте сюда URL входящего вебхука из Шага 2 (Часть А)
+// ... (ваши настройки остаются без изменений) ...
 define('B24_WEBHOOK_URL', 'https://tugur.bitrix24.ru/rest/15/c9x0qjz9quea1o01/');
-
-// Вставьте сюда токен вашего Telegram-бота из Шага 1
 define('TG_TOKEN', '8235183293:AAFjAhCwp1Y7OD21MLp8YUTSavMyf45y4Q4');
-
-// Вставьте сюда ID вашего чата (со знаком минус) из Шага 1
-define('TG_CHAT_ID', '-5206806235');
-
-// Вставьте сюда коды ваших пользовательских полей из Шага 2 (Часть Б)
-define('POSITIVE_EVENT_FIELD', 'UF_CRM_1768751320643'); // Код поля "Положительные события"
-define('NEGATIVE_EVENT_FIELD', 'UF_CRM_1768751944908'); // Код поля "Отрицательные события"
-define('EVENT_DATE_FIELD', 'UF_CRM_1770607841259');   // Код поля "Дата изменения события"
+define('TG_CHAT_ID', -5206806235');
+define('POSITIVE_EVENT_FIELD', 'UF_CRM_1768751320643');
+define('NEGATIVE_EVENT_FIELD', 'UF_CRM_1768751944908');
+define('EVENT_DATE_FIELD', 'UF_CRM_1770607841259');
 
 // --- КОНЕЦ НАСТРОЕК ---
 
@@ -26,9 +20,22 @@ function writeToLog($data, $title = '') {
     file_put_contents(getcwd() . '/webhook.log', $log, FILE_APPEND);
 }
 
-// Получаем данные от Bitrix24
-$request = json_decode(file_get_contents('php://input'), true);
-writeToLog($request, 'Request from B24');
+// Получаем сырые данные от Bitrix24
+$input = file_get_contents('php://input');
+// Декодируем JSON
+$request = json_decode($input, true);
+
+// Логируем для отладки
+writeToLog($input, 'RAW Request from B24');
+
+// === НАЧАЛО ИЗМЕНЕНИЙ ===
+// Проверяем, что данные пришли и это массив. Если открыть в браузере, $request будет null.
+if (!is_array($request) || !isset($request['event'])) {
+    // Просто завершаем работу, если данных нет.
+    exit();
+}
+// === КОНЕЦ ИЗМЕНЕНИЙ ===
+
 
 // Проверяем, что это событие обновления сделки
 if ($request['event'] !== 'ONCRMDEALUPDATE') {
@@ -125,3 +132,4 @@ curl_close($curl);
 
 writeToLog($response, 'Telegram Response');
 ?>
+
