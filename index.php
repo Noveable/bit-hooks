@@ -1,63 +1,55 @@
 <?php
 // --- НАСТРОЙКИ ---
-// ... (ваши настройки остаются без изменений) ...
+// Вставьте сюда ваши реальные данные
 define('B24_WEBHOOK_URL', 'https://tugur.bitrix24.ru/rest/15/c9x0qjz9quea1o01/');
 define('TG_TOKEN', '8235183293:AAFjAhCwp1Y7OD21MLp8YUTSavMyf45y4Q4');
 define('TG_CHAT_ID', '-5206806235');
 define('POSITIVE_EVENT_FIELD', 'UF_CRM_1768751320643');
 define('NEGATIVE_EVENT_FIELD', 'UF_CRM_1768751944908');
 define('EVENT_DATE_FIELD', 'UF_CRM_1770607841259');
-
 // --- КОНЕЦ НАСТРОЕК ---
 
-// Функция для логирования (помогает при отладке)
-function writeToLog($data, $title = '') {
-    $log = "\n------------------------\n";
-    $log .= date("Y.m.d G:i:s") . "\n";
-    $log .= (strlen($title) > 0 ? $title : 'DEBUG') . "\n";
+
+// === ОТЛАДОЧНАЯ ФУНКЦИЯ ДЛЯ ОТПРАВКИ ЛОГОВ В TELEGRAM ===
+function sendDebugToTelegram($data, $title = '') {
+    $log = "--- " . (strlen($title) > 0 ? $title : 'DEBUG') . " ---\n";
     $log .= print_r($data, true);
-    $log .= "\n------------------------\n";
-    file_put_contents(getcwd() . '/webhook.log', $log, FILE_APPEND);
+
+    $params = [
+        'chat_id' => TG_CHAT_ID,
+        'text' => $log,
+    ];
+    $url = 'https://api.telegram.org/bot' . TG_TOKEN . '/sendMessage?' . http_build_query($params);
+    file_get_contents($url); // Простой способ отправить GET-запрос
 }
 
-// Получаем сырые данные от Bitrix24
+// Получаем данные от Bitrix24
 $input = file_get_contents('php://input');
-// Декодируем JSON
 $request = json_decode($input, true);
 
-// Логируем для отладки
-writeToLog($input, 'RAW Request from B24');
+// Отправляем сырые данные в Telegram для анализа
+sendDebugToTelegram($input, 'RAW Request from B24');
 
-// === НАЧАЛО ИЗМЕНЕНИЙ ===
-// Проверяем, что данные пришли и это массив. Если открыть в браузере, $request будет null.
+// Проверяем, что данные пришли и это массив
 if (!is_array($request) || !isset($request['event'])) {
-    // Просто завершаем работу, если данных нет.
+    sendDebugToTelegram('Request is not a valid JSON or event key is missing.', 'ERROR');
     exit();
 }
-// === КОНЕЦ ИЗМЕНЕНИЙ ===
-
 
 // Проверяем, что это событие обновления сделки
 if ($request['event'] !== 'ONCRMDEALUPDATE') {
+    sendDebugToTelegram('Event is not ONCRMDEALUPDATE. Event was: ' . $request['event'], 'Exit Condition');
     exit();
 }
 
 $dealId = $request['data']['FIELDS']['ID'];
 
-// Функция для выполнения запросов к API Bitrix24
+// Функция для выполнения запросов к API Bitrix24 (остается без изменений)
 function executeB24Api($method, $params) {
     $queryUrl = B24_WEBHOOK_URL . $method . '.json';
     $queryData = http_build_query($params);
-
     $curl = curl_init();
-    curl_setopt_array($curl, array(
-        CURLOPT_SSL_VERIFYPEER => 0,
-        CURLOPT_POST => 1,
-        CURLOPT_HEADER => 0,
-        CURLOPT_RETURNTRANSFER => 1,
-        CURLOPT_URL => $queryUrl,
-        CURLOPT_POSTFIELDS => $queryData,
-    ));
+    curl_setopt_array($curl, array(CURLOPT_SSL_VERIFYPEER => 0, CURLOPT_POST => 1, CURLOPT_HEADER => 0, CURLOPT_RETURNTRANSFER => 1, CURLOPT_URL => $queryUrl, CURLOPT_POSTFIELDS => $queryData));
     $result = curl_exec($curl);
     curl_close($curl);
     return json_decode($result, true);
@@ -65,25 +57,25 @@ function executeB24Api($method, $params) {
 
 // 1. Получаем полную информацию о сделке
 $dealInfo = executeB24Api('crm.deal.get', ['id' => $dealId]);
+sendDebugToTelegram($dealInfo, 'Deal Info from B24 API');
 $deal = $dealInfo['result'];
-writeToLog($deal, 'Deal Info');
 
-// 2. Проверяем, заполнены ли поля событий. Если нет - выходим.
+// 2. Проверяем, заполнены ли поля событий
 $positiveEvent = !empty($deal[POSITIVE_EVENT_FIELD]) ? (is_array($deal[POSITIVE_EVENT_FIELD]) ? implode(', ', $deal[POSITIVE_EVENT_FIELD]) : $deal[POSITIVE_EVENT_FIELD]) : '';
 $negativeEvent = !empty($deal[NEGATIVE_EVENT_FIELD]) ? (is_array($deal[NEGATIVE_EVENT_FIELD]) ? implode(', ', $deal[NEGATIVE_EVENT_FIELD]) : $deal[NEGATIVE_EVENT_FIELD]) : '';
 
 if (empty($positiveEvent) && empty($negativeEvent)) {
+    sendDebugToTelegram('Positive and Negative fields are empty. Exiting.', 'Exit Condition');
     exit(); // Ни одно из полей событий не заполнено, уведомление не нужно.
 }
 
+// --- Если скрипт дошел до сюда, он отправит основное сообщение ---
+sendDebugToTelegram('Fields are filled. Preparing main message.', 'SUCCESS');
+
 // 3. Собираем информацию для сообщения
 $eventType = '';
-if (!empty($positiveEvent)) {
-    $eventType .= "Положительное: " . (is_string($positiveEvent) ? $positiveEvent : 'Да');
-}
-if (!empty($negativeEvent)) {
-    $eventType .= (!empty($eventType) ? "\n" : "") . "Отрицательное: " . (is_string($negativeEvent) ? $negativeEvent : 'Да');
-}
+if (!empty($positiveEvent)) $eventType .= "Положительное: " . (is_string($positiveEvent) ? $positiveEvent : 'Да');
+if (!empty($negativeEvent)) $eventType .= (!empty($eventType) ? "\n" : "") . "Отрицательное: " . (is_string($negativeEvent) ? $negativeEvent : 'Да');
 
 $responsibleName = 'Не назначен';
 if (!empty($deal['ASSIGNED_BY_ID'])) {
@@ -114,14 +106,9 @@ $message .= "**Сумма:** " . number_format($deal['OPPORTUNITY'], 2, ',', ' '
 $message .= "**Компания:** " . $companyName . "\n";
 $message .= "**Тип события:**\n" . $eventType;
 
-// 5. Отправляем сообщение в Telegram
+// 5. Отправляем основное сообщение в Telegram
 $telegramApiUrl = 'https://api.telegram.org/bot' . TG_TOKEN . '/sendMessage';
-$params = [
-    'chat_id' => TG_CHAT_ID,
-    'text' => $message,
-    'parse_mode' => 'Markdown',
-];
-
+$params = ['chat_id' => TG_CHAT_ID, 'text' => $message, 'parse_mode' => 'Markdown'];
 $curl = curl_init();
 curl_setopt($curl, CURLOPT_URL, $telegramApiUrl);
 curl_setopt($curl, CURLOPT_POST, true);
@@ -130,7 +117,5 @@ curl_setopt($curl, CURLOPT_RETURNTRANSFER, true);
 $response = curl_exec($curl);
 curl_close($curl);
 
-writeToLog($response, 'Telegram Response');
+sendDebugToTelegram($response, 'Telegram API Response for Main Message');
 ?>
-
-
