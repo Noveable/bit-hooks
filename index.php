@@ -5,13 +5,14 @@ define('B24_WEBHOOK_URL', 'https://tugur.bitrix24.ru/rest/15/c9x0qjz9quea1o01/')
 define('TG_TOKEN', '8235183293:AAFjAhCwp1Y7OD21MLp8YUTSavMyf45y4Q4');
 define('TG_CHAT_ID', '-5206806235');
 
-// Коды ваших полей событий
+// Коды ваших полей
 define('POSITIVE_EVENT_FIELD', 'UF_CRM_1768751320643'); 
 define('NEGATIVE_EVENT_FIELD', 'UF_CRM_1768751944908');
 define('EVENT_DATE_FIELD', 'UF_CRM_1770607841259');
-
-// === НОВОЕ ПОЛЕ! Вставьте сюда код поля "Контрольная сумма событий" из Шага 1 ===
 define('EVENT_CHECKSUM_FIELD', 'UF_CRM_1770809172'); 
+
+// === НОВОЕ ПОЛЕ! ===
+define('PURCHASE_FIELD', 'UF_CRM_1768477744773');
 
 // --- КОНЕЦ НАСТРОЕК ---
 
@@ -45,8 +46,6 @@ $deal = $dealInfo['result'];
 $positiveEventIds = !empty($deal[POSITIVE_EVENT_FIELD]) ? $deal[POSITIVE_EVENT_FIELD] : [];
 $negativeEventIds = !empty($deal[NEGATIVE_EVENT_FIELD]) ? $deal[NEGATIVE_EVENT_FIELD] : [];
 
-// === НАЧАЛО НОВОЙ ЛОГИКИ С "ОТПЕЧАТКОМ" ===
-
 // 3. Создаем "отпечаток" (хеш) из текущих ID событий
 $currentEventData = json_encode(['positive' => $positiveEventIds, 'negative' => $negativeEventIds]);
 $currentHash = md5($currentEventData);
@@ -54,22 +53,29 @@ $currentHash = md5($currentEventData);
 // 4. Получаем старый "отпечаток", сохраненный в сделке
 $storedHash = !empty($deal[EVENT_CHECKSUM_FIELD]) ? $deal[EVENT_CHECKSUM_FIELD] : '';
 
-// 5. СРАВНИВАЕМ "ОТПЕЧАТКИ". Если они совпадают, значит, события не менялись.
+// 5. ГЛАВНАЯ ПРОВЕРКА
 if ($currentHash === $storedHash) {
-    exit(); // Ничего не изменилось, завершаем работу.
+    // "Отпечатки" совпадают, значит, события не менялись. Выходим.
+    exit();
 }
 
-// === КОНЕЦ НОВОЙ ЛОГИКИ С "ОТПЕЧАТКОМ" ===
+if ($storedHash === '') {
+    // Если старый "отпечаток" пустой, это первая "инициализация" сделки.
+    // Тихо обновляем "отпечаток" в сделке и НЕ отправляем уведомление.
+    executeB24Api('crm.deal.update', ['id' => $dealId, 'fields' => [EVENT_CHECKSUM_FIELD => $currentHash]]);
+    exit();
+}
 
-
-// Если скрипт дошел до сюда, значит, события изменились и нужно отправить уведомление.
+// Если скрипт дошел до сюда, значит, события изменились.
 
 // 6. "Переводчик" для полей типа "Список"
 function translateListValues($fieldCode, $selectedIds, $allFields) {
     if (empty($selectedIds) || !is_array($allFields)) return '';
     if (!is_array($selectedIds)) $selectedIds = [$selectedIds];
-    if (!isset($allFields[$fieldCode]) || !isset($allFields[$fieldCode]['items'])) return implode(', ', $selectedIds);
-
+    if (!isset($allFields[$fieldCode]) || !isset($allFields[$fieldCode]['items'])) {
+        // Если это не список, а простое текстовое поле, возвращаем его как есть.
+        return implode(', ', $selectedIds);
+    }
     $translationMap = array_column($allFields[$fieldCode]['items'], 'VALUE', 'ID');
     $translatedValues = [];
     foreach ($selectedIds as $id) {
@@ -84,9 +90,14 @@ $dealFields = $dealFieldsInfo['result'];
 $positiveEventText = translateListValues(POSITIVE_EVENT_FIELD, $positiveEventIds, $dealFields);
 $negativeEventText = translateListValues(NEGATIVE_EVENT_FIELD, $negativeEventIds, $dealFields);
 
+// === НОВОЕ: "Переводим" поле "Что покупают" ===
+$purchaseData = !empty($deal[PURCHASE_FIELD]) ? $deal[PURCHASE_FIELD] : '';
+$purchaseText = translateListValues(PURCHASE_FIELD, $purchaseData, $dealFields);
+
+
 // 8. Проверяем, есть ли что отправлять
 if (empty($positiveEventText) && empty($negativeEventText)) {
-    // Если события очистили, обновляем хеш на пустой и выходим
+    // Если события очистили, обновляем хеш на новый (пустой) и выходим
     executeB24Api('crm.deal.update', ['id' => $dealId, 'fields' => [EVENT_CHECKSUM_FIELD => $currentHash]]);
     exit();
 }
@@ -117,13 +128,21 @@ $dealDateRaw = !empty($deal[EVENT_DATE_FIELD]) ? $deal[EVENT_DATE_FIELD] : $deal
 $dealDate = date('d.m.Y H:i', strtotime($dealDateRaw));
 
 // 10. Формируем финальный текст сообщения
-$message = "🔔 **Событие по сделке**\n\n";
-$message .= "**Ответственный:** " . $responsibleName . "\n";
+$message = "🔔 **Новое событие в сделке**\n\n";
 $message .= "**Дата события:** " . $dealDate . "\n";
 $message .= "**Название сделки:** " . $deal['TITLE'] . "\n";
+$message .= "**Ответственный:** " . $responsibleName . "\n";
+$message .= "**Тип события:**\n" . $eventType;
+$message .= "**Компания:** " . $companyName . "\n";
+
+// === НОВОЕ: Добавляем поле "Что покупают" в сообщение, если оно заполнено ===
+if (!empty($purchaseText)) {
+    $message .= "**Что покупают:** " . $purchaseText . "\n";
+}
+
 $message .= "**Сумма:** " . number_format($deal['OPPORTUNITY'], 2, ',', ' ') . ' ' . $deal['CURRENCY_ID'] . "\n";
 $message .= "**Компания:** " . $companyName . "\n";
-$message .= "**Тип события:**\n" . $eventType;
+
 
 // 11. Отправляем сообщение в Telegram
 $telegramApiUrl = 'https://api.telegram.org/bot' . TG_TOKEN . '/sendMessage';
@@ -136,12 +155,11 @@ curl_setopt($curl_tg, CURLOPT_RETURNTRANSFER, true);
 curl_exec($curl_tg);
 curl_close($curl_tg);
 
-// 12. ОБНОВЛЯЕМ "ОТПЕЧАТОК" В СДЕЛКЕ! Это самый важный шаг.
+// 12. ОБНОВЛЯЕМ "ОТПЕЧАТОК" В СДЕЛКЕ!
 executeB24Api('crm.deal.update', [
     'id' => $dealId,
     'fields' => [
         EVENT_CHECKSUM_FIELD => $currentHash
     ]
 ]);
-
 ?>
