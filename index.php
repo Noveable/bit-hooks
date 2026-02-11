@@ -14,25 +14,18 @@ define('EVENT_DATE_FIELD', 'UF_CRM_1770607841259');
 function sendDebugToTelegram($data, $title = '') {
     $log = "--- " . (strlen($title) > 0 ? $title : 'DEBUG') . " ---\n";
     $log .= print_r($data, true);
-
-    $params = [
-        'chat_id' => TG_CHAT_ID,
-        'text' => $log,
-    ];
+    $params = ['chat_id' => TG_CHAT_ID, 'text' => substr($log, 0, 4096)]; // Обрезаем лог, если он слишком длинный
     $url = 'https://api.telegram.org/bot' . TG_TOKEN . '/sendMessage?' . http_build_query($params);
-    file_get_contents($url); // Простой способ отправить GET-запрос
+    file_get_contents($url);
 }
 
-// Получаем данные от Bitrix24
-$input = file_get_contents('php://input');
-$request = json_decode($input, true);
-
-// Отправляем сырые данные в Telegram для анализа
-sendDebugToTelegram($input, 'RAW Request from B24');
+// === ИЗМЕНЕНИЕ ЗДЕСЬ: Читаем данные из $_POST ===
+$request = $_POST;
+sendDebugToTelegram($request, 'Data from POST');
 
 // Проверяем, что данные пришли и это массив
 if (!is_array($request) || !isset($request['event'])) {
-    sendDebugToTelegram('Request is not a valid JSON or event key is missing.', 'ERROR');
+    sendDebugToTelegram('Request is not a valid array or event key is missing.', 'ERROR');
     exit();
 }
 
@@ -43,8 +36,9 @@ if ($request['event'] !== 'ONCRMDEALUPDATE') {
 }
 
 $dealId = $request['data']['FIELDS']['ID'];
+sendDebugToTelegram("Got Deal ID: " . $dealId, "INFO");
 
-// Функция для выполнения запросов к API Bitrix24 (остается без изменений)
+// Функция для выполнения запросов к API Bitrix24
 function executeB24Api($method, $params) {
     $queryUrl = B24_WEBHOOK_URL . $method . '.json';
     $queryData = http_build_query($params);
@@ -66,10 +60,9 @@ $negativeEvent = !empty($deal[NEGATIVE_EVENT_FIELD]) ? (is_array($deal[NEGATIVE_
 
 if (empty($positiveEvent) && empty($negativeEvent)) {
     sendDebugToTelegram('Positive and Negative fields are empty. Exiting.', 'Exit Condition');
-    exit(); // Ни одно из полей событий не заполнено, уведомление не нужно.
+    exit();
 }
 
-// --- Если скрипт дошел до сюда, он отправит основное сообщение ---
 sendDebugToTelegram('Fields are filled. Preparing main message.', 'SUCCESS');
 
 // 3. Собираем информацию для сообщения
@@ -119,3 +112,4 @@ curl_close($curl);
 
 sendDebugToTelegram($response, 'Telegram API Response for Main Message');
 ?>
+
