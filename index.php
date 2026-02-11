@@ -3,11 +3,11 @@
 // ========================
 //  НАСТРОЙКИ
 // ========================
-$TELEGRAM_BOT_TOKEN = "ВАШ_TELEGRAM_BОT_TOKEN";
-$TELEGRAM_CHAT_ID   = "ВАШ_CHAT_ID";
+$TELEGRAM_BOT_TOKEN = "8235183293:AAFjAhCwp1Y7OD21MLp8YUTSavMyf45y4Q4";
+$TELEGRAM_CHAT_ID   = "8235183293";
 
 // Входящий вебхук Bitrix24 (созданный в разделе Приложения → Вебхуки)
-$B24_WEBHOOK = "https://yourportal.bitrix24.ru/rest/1/XXXXXXXXX/";
+$B24_WEBHOOK = "https://tugur.bitrix24.ru/rest/15/c9x0qjz9quea1o01/profile.json";
 
 // Ваши ID пользовательских полей в сделке
 $UF_POSITIVE_EVENT = "UF_CRM_POSITIVE_EVENT";   // Положительные события
